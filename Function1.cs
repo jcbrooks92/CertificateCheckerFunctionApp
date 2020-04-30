@@ -16,31 +16,37 @@ using System.Collections.Generic;
 
 namespace CertificateCheckerFunctionApp
 {
-    public static class Function1
+
+    public class Function1
     {
+        public static HttpClient httpClient = new HttpClient();
+
         [FunctionName("Function1")]
         public static async Task<IActionResult> Run(
             [HttpTrigger(AuthorizationLevel.Function, "get", "post", Route = null)] HttpRequest req,
             ILogger log)
         {
+            //Declare Variables
             CertInformation cert = new CertInformation();
-            List<string> url = new List<string> { null };
+            IList<CertInformation> certList = new List<CertInformation>();
+            IList<string> url = new List<string>();
+          
             log.LogInformation("C# HTTP trigger function processed a request.");
 
             var requestBodyJson = await new StreamReader(req.Body).ReadToEndAsync();
-
-            string name = req.Query["name"];
             try
             {
+                //Check if body contains URLS to check
                 if (requestBodyJson != null)
                 {
                     List <TempJsonBody> tempBody = System.Text.Json.JsonSerializer.Deserialize<List<TempJsonBody>>(requestBodyJson);
+                    log.LogInformation($"Count: {tempBody.Count}");
                     foreach(TempJsonBody temp in tempBody)
                     {
-                     //   url
+                        url.Add(temp.Name);
                     }
-                    url[0] = tempBody[0].Name;
                 }
+                //Else Check the query string for URLs to check
                 else if (req.Query["url"].ToString() != null)
                 {
                     url[0] = req.Query["url"];
@@ -50,62 +56,56 @@ namespace CertificateCheckerFunctionApp
             catch(Exception e)
             {
                 log.LogError($"Exception occurred: {e}");
+                return new BadRequestObjectResult($"Failed to get parse cert from header or body with exception{e}");
             }
 
-            //Check if correct format
-            /* if (url == Uri)
-             {
+            //Logic for checking if URL is the correct format
+            //
 
-             }
-             else {
-                 log.LogInformation($"No changes to {url}")
-             }*/
+            //Foreach URL try to get Cert information
             foreach (string urlValue in url)
             {
                 try
                 {
-                    X509Certificate2 certObject = await GetServerCertificateAsync("https://" + urlValue);
-
-                    cert.URL = urlValue;
-                    cert.CertExpiration = certObject.GetExpirationDateString();
-                    cert.ThumbPrint = certObject.Thumbprint;
-                    cert.ValidFromDate = certObject.GetEffectiveDateString();
-                    cert.RawCert = certObject.RawData;
-                    cert.LastUpdateTime = DateTime.Now;
-
-                    log.LogInformation($"Cert Expiration: {certObject.GetExpirationDateString()}");
-
-                    cert.TimeTilExpiration = IsCertificateExpiring(cert, log);
-
+                    cert = await GetCertInformation(urlValue, cert, log);
                     if (cert.TimeTilExpiration.TotalSeconds > 0)
                     {
                         cert.IsExpired = false;
-                        log.LogInformation($"Cert expires in {cert.TimeTilExpiration.TotalDays} days.");
+                        log.LogInformation($"Cert for {cert.URL} expires in {cert.TimeTilExpiration.TotalDays} days.");
                     }
                     else
                     {
                         cert.IsExpired = true;
-                        log.LogInformation($"Cert expired {cert.TimeTilExpiration.TotalDays} days ago.");
+                        log.LogInformation($"Cert for {cert.URL} expired {cert.TimeTilExpiration.TotalDays} days ago.");
                     }
-                        
+                    certList.Add(cert); 
                 }
                 catch (Exception e)
                 {
                     log.LogError($"Exception Occurred: {e}");
+                    return new BadRequestObjectResult($"Failed to get parse cert with exception{e}");
                 }
             }
+            //Convert to JSON 
+            string jsonString = System.Text.Json.JsonSerializer.Serialize(certList);
 
-            string jsonString = System.Text.Json.JsonSerializer.Serialize(cert);
+            return new OkObjectResult(jsonString);
+        }
 
-            string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-            dynamic data = JsonConvert.DeserializeObject(requestBody);
-            name = name ?? data?.name;
+        public static async Task<CertInformation>GetCertInformation(string urlValue, CertInformation cert, ILogger log)
+        {
+            X509Certificate2 certObject = await GetServerCertificateAsync("https://" + urlValue);
 
-            string responseMessage = string.IsNullOrEmpty(name)
-                ? "This HTTP triggered function executed successfully. Pass a name in the query string or in the request body for a personalized response."
-                : $"Hello, {name}. This HTTP triggered function executed successfully.";
+            cert.URL = urlValue;
+            cert.CertExpiration = certObject.GetExpirationDateString();
+            cert.ThumbPrint = certObject.Thumbprint;
+            cert.ValidFromDate = certObject.GetEffectiveDateString();
+            cert.RawCert = certObject.RawData;
+            cert.LastUpdateTime = DateTime.Now;
 
-            return new OkObjectResult(responseMessage);
+            log.LogInformation($"Cert for {cert.URL} Expiration: {certObject.GetExpirationDateString()}");
+            cert.TimeTilExpiration = IsCertificateExpiring(cert, log);
+            return cert;
         }
 
         static TimeSpan IsCertificateExpiring(CertInformation cert, ILogger log)
@@ -115,7 +115,8 @@ namespace CertificateCheckerFunctionApp
 
             return expirationTime;
         }
-        static async Task<X509Certificate2> GetServerCertificateAsync(string url)
+
+         static async Task<X509Certificate2> GetServerCertificateAsync(string url)
         {
             X509Certificate2 certificate = null;
             var httpClientHandler = new HttpClientHandler
@@ -126,28 +127,9 @@ namespace CertificateCheckerFunctionApp
                     return true;
                 }
             };
-
-            var httpClient = new HttpClient(httpClientHandler);
+            httpClient = new HttpClient(httpClientHandler);
             await httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Head, url));
-
             return certificate ?? throw new NullReferenceException();
         }
-    }
-
-    public class TempJsonBody
-    {
-        public string Name { get;  set; }
-    }
-
-    public class CertInformation 
-    {
-        internal string URL;
-        public  string CertExpiration { get;  set; }
-        public string ThumbPrint { get;  set; }
-        public string ValidFromDate { get;  set; }
-        public byte[] RawCert { get;  set; }
-        public DateTime LastUpdateTime { get;  set; }
-        public TimeSpan TimeTilExpiration { get;  set; }
-        public bool IsExpired { get;  set; }
     }
 }
