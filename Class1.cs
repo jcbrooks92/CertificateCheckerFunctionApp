@@ -21,6 +21,7 @@ namespace CertificateCheckerFunctionApp
         public string TimeTilExpiration { get; set; }
         public bool IsExpired { get; set; }
         public string Region { get; set; }
+        public string SAN { get; set; }
 
     }
 }
